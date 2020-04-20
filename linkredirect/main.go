@@ -11,7 +11,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/julienschmidt/httprouter"
+	"github.com/gin-gonic/autotls"
+	"github.com/gin-gonic/gin"
 )
 
 type templData struct {
@@ -48,7 +49,7 @@ var templ string = `
 
 var index = template.Must(template.New("Main").Parse(templ))
 
-func Index(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+func Index(w http.ResponseWriter, r *http.Request) {
 	count, urls := masterAllocator.Info()
 	data := templData{
 		CountPer: count,
@@ -60,10 +61,10 @@ func Index(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	}
 }
 
-func Set(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+func Set(w http.ResponseWriter, r *http.Request) {
 	err := r.ParseForm()
 	defer r.Body.Close()
-	defer Index(w, r, nil)
+	defer Index(w, r)
 	if err != nil {
 		fmt.Printf("Error: %s", err)
 		return
@@ -119,7 +120,7 @@ func Set(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 
 var masterAllocator *LinkAllocator
 
-func Redirect(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+func Redirect(w http.ResponseWriter, r *http.Request) {
 	url, err := masterAllocator.Next()
 	if err != nil {
 		fmt.Printf("Error: %s", err)
@@ -131,14 +132,30 @@ func Redirect(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 }
 
 func main() {
-	router := httprouter.New()
-	router.GET("/", Index)
-	router.POST("/", Set)
-	router.GET("/redirectLink", Redirect)
+	router := gin.Default()
 
-	router.ServeFiles("/.well-known/*filepath", http.Dir("./.well-known"))
+	router.Any("/", gin.WrapF(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, fmt.Sprintf("https://%s%s", r.Host, r.RequestURI), http.StatusMovedPermanently)
+	}))
+	router.GET("/redirectLink", gin.WrapF(Redirect))
 
-	log.Fatal(http.ListenAndServe(":80", router))
+	go func() {
+		log.Fatal(http.ListenAndServe(":80", router))
+	}()
+
+	admin := gin.Default()
+	// Ping handler
+	admin.GET("/ping", func(c *gin.Context) {
+		c.String(http.StatusOK, "pong")
+	})
+
+	authorized := admin.Group("/", gin.BasicAuth(gin.Accounts{
+		"admin": "NQ8xcYVeQvBEjtma6OOw",
+	}))
+	authorized.GET("/", gin.WrapF(Index))
+	authorized.POST("/", gin.WrapF(Set))
+
+	log.Fatal(autotls.Run(admin, "redirect.quinnmueller.me"))
 }
 
 type LinkAllocator struct {
