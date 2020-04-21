@@ -17,7 +17,14 @@ import (
 
 type templData struct {
 	CountPer int
-	URLs     []string
+	URLs     []UrlInfo
+}
+
+type UrlInfo struct {
+	URL      string
+	Count    int
+	MaxCount int
+	Active   bool
 }
 
 var templ string = `
@@ -26,18 +33,24 @@ var templ string = `
 
 <p>Redirects per URL: {{.CountPer}}</p>
 <p>Current URLs:</p>
-{{range .URLs}}
-<p>{{.}}</p>
-{{end}}
+<table>
+<tr><th>URL</th><th>Count</th></tr>
+{{- range .URLs}}
+<tr{{if .Active}} style="font-weight:bold"{{end}}><td>{{.URL}}</td><td>({{.Count}}/{{.MaxCount}})</td></tr>
+{{- end}}
+</table>
 <br>
 <form method="post">
 <label for="count">Redirect Count to each URL:</label>
 <br>
-<input type="number" id="count" name="countPer" required>
+<input type="number" id="count" name="countPer" required value="{{.CountPer}}">
 <br>
 <label for="urls">URLs (separated by new line):</label>
 <br>
 <textarea id="urls" name="urlList" rows="10" cols="100" required>
+{{- range .URLs}}
+{{.URL}}
+{{- end}}
 </textarea>
 <br>
 <button>Set Redirect</button>
@@ -50,10 +63,32 @@ var templ string = `
 var index = template.Must(template.New("Main").Parse(templ))
 
 func Index(w http.ResponseWriter, r *http.Request) {
-	count, urls := masterAllocator.Info()
+	current, count, urls := masterAllocator.Info()
+
+	var urlData []UrlInfo
+	if count > 0 && len(urls) > 0 {
+		bin := current / count
+		for index, url := range urls {
+			var active bool
+			var urlCount int
+			if index == bin {
+				active = true
+				urlCount = current % count
+			} else if bin > index {
+				urlCount = count
+			}
+			urlData = append(urlData, UrlInfo{
+				URL:      url,
+				Count:    urlCount,
+				MaxCount: count,
+				Active:   active,
+			})
+		}
+	}
+
 	data := templData{
 		CountPer: count,
-		URLs:     urls,
+		URLs:     urlData,
 	}
 	err := index.Execute(w, data)
 	if err != nil {
@@ -135,7 +170,7 @@ func main() {
 	router := gin.Default()
 
 	router.Any("/", gin.WrapF(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, fmt.Sprintf("https://%s%s", r.Host, r.RequestURI), http.StatusMovedPermanently)
+		http.Redirect(w, r, "https://redirect.quinnmueller.me/", http.StatusMovedPermanently)
 	}))
 	router.GET("/redirectLink", gin.WrapF(Redirect))
 
@@ -165,11 +200,14 @@ type LinkAllocator struct {
 	URLs         []string
 }
 
-func (l *LinkAllocator) Info() (count int, urls []string) {
+func (l *LinkAllocator) Info() (currentCount, countPer int, urls []string) {
 	if l == nil {
 		return
 	}
-	count = l.CountPer
+	l.Lock()
+	defer l.Unlock()
+	currentCount = l.CurrentCount
+	countPer = l.CountPer
 	urls = l.URLs
 	return
 }
