@@ -2,4 +2,4 @@
 
 `linkredirect -u admin -p somepassword -host www.example.com`
 
-user and password are for basic auth login
+User and password are for basic auth login. Host for https certificate.
